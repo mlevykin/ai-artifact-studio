@@ -742,7 +742,6 @@ function MermaidView({ code, onSvgReady, t }) {
     </div>
   );
 }
-
 // ─── Markdown renderer for chat bubbles ──────────────────────────────────────
 
 function renderMarkdown(text) {
@@ -1031,10 +1030,24 @@ export default function App() {
   const t = T[lang];
   const toggleLang = () => { const next = lang==="ru"?"en":"ru"; setLang(next); localStorage.setItem("as_lang", next); };
 
-  const [cfg, setCfg] = useState({
-    provider: "ollama", claudeModel: "claude-sonnet-4-20250514",
-    ollamaBase: "http://localhost:11434", ollamaModel: "llama3.2",
+  const [cfg, setCfg] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("as_cfg") || "{}");
+      return {
+        provider:    saved.provider    || "ollama",
+        claudeModel: saved.claudeModel || "claude-sonnet-4-20250514",
+        ollamaBase:  saved.ollamaBase  || "http://localhost:11434",
+        ollamaModel: saved.ollamaModel || "llama3.2",
+      };
+    } catch {
+      return { provider: "ollama", claudeModel: "claude-sonnet-4-20250514", ollamaBase: "http://localhost:11434", ollamaModel: "llama3.2" };
+    }
   });
+
+  // Сохраняем cfg при каждом изменении
+  useEffect(() => {
+    localStorage.setItem("as_cfg", JSON.stringify(cfg));
+  }, [cfg]);
   const [status, setStatus] = useState("idle");
   const [showSettings, setShowSettings] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
