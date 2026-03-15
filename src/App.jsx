@@ -473,7 +473,7 @@ CONTENT
 </artifact>
 
 Types:
-- mermaid → ANY diagram: flowchart, sequence, class, state, ER, gantt, timeline. Content = raw mermaid syntax only, no backticks. In sequenceDiagram: "Note over" accepts max 2 participants. In timeline: format is "period : event". In flowchart: every arrow MUST have a target node id, never use quoted strings as node ids, never put double quotes inside edge labels.
+- mermaid → ANY diagram: flowchart, sequence, class, state, ER, gantt, timeline. Content = raw mermaid syntax only, no backticks. In sequenceDiagram: "Note over" accepts max 2 participants. In timeline: format is "period : event". In flowchart: every arrow MUST have a target node id, never use quoted strings as node ids, never put double quotes inside edge labels, subgraph IDs must use only Latin letters and underscores (e.g. subgraph AI_Area [Искусственный Интеллект]), never use parentheses () inside subgraph or node labels.
 - html → interactive apps, slides, visual layouts. Content = complete self-contained HTML.
 - markdown → documents, reports.
 - svg → raw SVG graphics.
