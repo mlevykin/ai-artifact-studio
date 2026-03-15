@@ -653,13 +653,41 @@ function MermaidView({ code, onSvgReady, t }) {
     const doRender = (c) => {
       try {
         const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-        window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "loose", sequence: { useMaxWidth: false } });
+        window.mermaid.initialize({
+          startOnLoad: false,
+          theme: dark ? "dark" : "default",
+          securityLevel: "loose",
+          sequence: { useMaxWidth: false },
+          flowchart: { useMaxWidth: false },
+        });
         window.mermaid.render(renderId, c)
           .then(({ svg }) => {
             if (!ref.current) return;
             ref.current.innerHTML = svg;
             const el = ref.current.querySelector("svg");
-            if (el) { el.style.maxWidth = "none"; el.style.height = "auto"; el.style.display = "block"; onSvgReady?.(new XMLSerializer().serializeToString(el)); }
+            if (!el) return;
+
+            // Читаем натуральный размер из viewBox
+            const vb = el.getAttribute("viewBox");
+            let naturalW = 0, naturalH = 0;
+            if (vb) {
+              const parts = vb.trim().split(/[\s,]+/);
+              naturalW = parseFloat(parts[2]) || 0;
+              naturalH = parseFloat(parts[3]) || 0;
+            }
+
+            // Убираем ограничения Mermaid, ставим явный px-размер
+            el.removeAttribute("width");
+            el.removeAttribute("height");
+            el.style.maxWidth = "none";
+            el.style.display = "block";
+            if (naturalW > 0) el.style.width = naturalW + "px";
+            if (naturalH > 0) el.style.height = naturalH + "px";
+
+            // Сохраняем для кнопки ⇔
+            ref.current.dataset.naturalW = naturalW || 800;
+
+            onSvgReady?.(new XMLSerializer().serializeToString(el));
           })
           .catch(e => setErr(String(e)));
       } catch (e) { setErr(String(e)); }
@@ -675,7 +703,7 @@ function MermaidView({ code, onSvgReady, t }) {
     document.head.appendChild(script);
   }, [code]);
 
-  const onWheel = e => { e.preventDefault(); setZoom(z => Math.min(5, Math.max(0.2, z - e.deltaY*0.001))); };
+  const onWheel = e => { e.preventDefault(); setZoom(z => Math.min(10, Math.max(0.1, z - e.deltaY * 0.001))); };
   const onMouseDown = e => { dragging.current = true; dragStart.current = { mx: e.clientX, my: e.clientY, px: pan.x, py: pan.y }; };
   const onMouseMove = e => { if (!dragging.current) return; setPan({ x: dragStart.current.px + e.clientX - dragStart.current.mx, y: dragStart.current.py + e.clientY - dragStart.current.my }); };
   const onMouseUp = () => { dragging.current = false; };
@@ -685,14 +713,31 @@ function MermaidView({ code, onSvgReady, t }) {
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 10, right: 10, zIndex: 10, display: "flex", gap: 4, alignItems: "center" }}>
-        <button onClick={() => setZoom(z => Math.min(5, z+0.2))} style={zoomBtnStyle}>+</button>
-        <span style={{ fontSize: 11, color: "var(--text2)", minWidth: 38, textAlign: "center" }}>{Math.round(zoom*100)}%</span>
-        <button onClick={() => setZoom(z => Math.max(0.2, z-0.2))} style={zoomBtnStyle}>−</button>
-        <button onClick={() => { setZoom(1); setPan({ x:0, y:0 }); }} style={zoomBtnStyle}>⊙</button>
+        <button onClick={() => setZoom(z => Math.min(10, z + 0.2))} style={zoomBtnStyle}>+</button>
+        <span style={{ fontSize: 11, color: "var(--text2)", minWidth: 38, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+        <button onClick={() => setZoom(z => Math.max(0.1, z - 0.2))} style={zoomBtnStyle}>−</button>
+        <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} style={zoomBtnStyle} title="Reset">⊙</button>
+        <button onClick={() => {
+          if (ref.current?.parentElement) {
+            const containerW = ref.current.parentElement.clientWidth - 48;
+            const naturalW = parseFloat(ref.current.dataset.naturalW) || 800;
+            const fitZoom = containerW / naturalW;
+            setZoom(fitZoom);
+            setPan({ x: 0, y: 0 });
+          }
+        }} style={{ ...zoomBtnStyle, fontSize: 12, width: 32 }} title="Fit width">⇔</button>
       </div>
-      <div style={{ width: "100%", height: "100%", overflow: "hidden", cursor: dragging.current ? "grabbing" : "grab" }}
-        onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
-        <div ref={ref} style={{ transformOrigin: "0 0", transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})`, padding: 24, display: "inline-block" }} />
+      <div
+        style={{ width: "100%", height: "100%", overflow: "hidden", cursor: dragging.current ? "grabbing" : "grab" }}
+        onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
+      >
+        <div ref={ref} style={{
+          transformOrigin: "0 0",
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          padding: 24,
+          display: "inline-block",
+        }} />
       </div>
     </div>
   );
