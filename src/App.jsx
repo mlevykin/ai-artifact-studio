@@ -31,6 +31,7 @@ const T = {
     sessions: "Чаты", newChat: "+ Новый чат",
     patched: "патч применён", saveVersion: "💾 Сохранить версию",
     changes: "изменение", changes2: "изменения",
+    fullscreen: "Полный экран", exitFullscreen: "Выйти",
   },
   en: {
     appTitle: "Artifact Studio",
@@ -61,6 +62,7 @@ const T = {
     sessions: "Chats", newChat: "+ New chat",
     patched: "patch applied", saveVersion: "💾 Save version",
     changes: "change", changes2: "changes",
+    fullscreen: "Полный экран", exitFullscreen: "Выйти",
   },
 };
 
@@ -336,16 +338,27 @@ function HtmlView({content}){
 // ─── Mermaid renderer ─────────────────────────────────────────────────────────
 
 function MermaidView({code,onSvgReady,t}){
-  const ref=useRef(null);const[err,setErr]=useState(null);const[zoom,setZoom]=useState(1);const[pan,setPan]=useState({x:0,y:0});const dragging=useRef(false);const dragStart=useRef({mx:0,my:0,px:0,py:0});
+  const ref = useRef(null);
+  const [err, setErr] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({x:0, y:0});
+  const dragging = useRef(false);
+  const dragStart = useRef({mx:0, my:0, px:0, py:0});
+  const wheelContainerRef = useRef(null);
+  const zoomRef = useRef(1);
+  const panRef = useRef({x:0, y:0});
+
   useEffect(()=>{
-    setZoom(1);setPan({x:0,y:0});
+    setZoom(1); setPan({x:0,y:0}); zoomRef.current=1; panRef.current={x:0,y:0};
     if(!ref.current||!code)return;
-    setErr(null);ref.current.innerHTML="";
+    setErr(null); ref.current.innerHTML="";
     const renderId="mg"+Date.now()+Math.random().toString(36).slice(2);
     const cleanCode=(()=>{
-      let c=code.replace(/<br\s*\/?>/gi," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/^\s*```[a-z]*\s*/i,"").replace(/\s*```\s*$/i,"")
+      let c=code.replace(/<br\s*\/?>/gi," ").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+        .replace(/^\s*```[a-z]*\s*/i,"").replace(/\s*```\s*$/i,"")
         .replace(/Note\s+over\s+(\w+)(?:,\w+){2,}/gi,m=>{const p=m.replace(/Note\s+over\s+/i,"").split(",");return `Note over ${p[0]},${p[p.length-1]}`;})
-        .replace(/-->\|"([^"]+)"\|/g,"-->|$1|").replace(/^.*-->\|[^|]*\]\s*$/gm,"").replace(/^\s*"[^"]+"\s*-+[->]+.*$/gm,"")
+        .replace(/-->\|"([^"]+)"\|/g,"-->|$1|").replace(/^.*-->\|[^|]*\]\s*$/gm,"")
+        .replace(/^\s*"[^"]+"\s*-+[->]+.*$/gm,"")
         .replace(/^(\s*subgraph\s+\w+\s*\[)([^\]]*)\]/gm,(m,pre,lbl)=>pre+lbl.replace(/[()]/g,"")+"]")
         .replace(/^(\s*subgraph\s+)([^\s\[]+)/gm,(m,pre,id)=>pre+id.replace(/[^\w]/g,"_"));
       if(/^\s*timeline/i.test(c))c=c.replace(/^(\s+)(.+?)\s*:\s*(\d{1,2}:\d{2})\s*$/gm,"$1$3 : $2");
@@ -361,7 +374,8 @@ function MermaidView({code,onSvgReady,t}){
           const el=ref.current.querySelector("svg");if(!el)return;
           const vb=el.getAttribute("viewBox");let nW=0,nH=0;
           if(vb){const p=vb.trim().split(/[\s,]+/);nW=parseFloat(p[2])||0;nH=parseFloat(p[3])||0;}
-          el.removeAttribute("width");el.removeAttribute("height");el.style.maxWidth="none";el.style.display="block";
+          el.removeAttribute("width");el.removeAttribute("height");
+          el.style.maxWidth="none";el.style.display="block";el.style.margin="0";
           if(nW>0)el.style.width=nW+"px";if(nH>0)el.style.height=nH+"px";
           ref.current.dataset.naturalW=nW||800;
           onSvgReady?.(new XMLSerializer().serializeToString(el));
@@ -376,27 +390,62 @@ function MermaidView({code,onSvgReady,t}){
     script.onload=()=>doRender(cleanCode);script.onerror=()=>setErr(t.mermaidLoad);
     document.head.appendChild(script);
   },[code]);
-  const onWheel=e=>{e.preventDefault();setZoom(z=>Math.min(10,Math.max(0.1,z-e.deltaY*0.001)));};
-  const onMouseDown=e=>{dragging.current=true;dragStart.current={mx:e.clientX,my:e.clientY,px:pan.x,py:pan.y};};
-  const onMouseMove=e=>{if(!dragging.current)return;setPan({x:dragStart.current.px+e.clientX-dragStart.current.mx,y:dragStart.current.py+e.clientY-dragStart.current.my});};
+
+  // Нативный wheel — {passive:false} чтобы preventDefault работал
+  useEffect(()=>{
+    const el=wheelContainerRef.current;
+    if(!el)return;
+    const handler=e=>{
+      e.preventDefault();
+      const oldZoom=zoomRef.current;
+      const newZoom=Math.min(10,Math.max(0.1,oldZoom*(1-e.deltaY*0.001)));
+      if(Math.abs(newZoom-oldZoom)<0.0001)return;
+      const rect=el.getBoundingClientRect();
+      const mouseX=e.clientX-rect.left;
+      const mouseY=e.clientY-rect.top;
+      const curPan=panRef.current;
+      const contentX=(mouseX-curPan.x)/oldZoom;
+      const contentY=(mouseY-curPan.y)/oldZoom;
+      const newPan={x:mouseX-contentX*newZoom, y:mouseY-contentY*newZoom};
+      zoomRef.current=newZoom;
+      panRef.current=newPan;
+      setZoom(newZoom);
+      setPan(newPan);
+    };
+    el.addEventListener("wheel",handler,{passive:false});
+    return()=>el.removeEventListener("wheel",handler);
+  });
+
+  const onMouseDown=e=>{dragging.current=true;dragStart.current={mx:e.clientX,my:e.clientY,px:panRef.current.x,py:panRef.current.y};};
+  const onMouseMove=e=>{if(!dragging.current)return;const newPan={x:dragStart.current.px+e.clientX-dragStart.current.mx,y:dragStart.current.py+e.clientY-dragStart.current.my};panRef.current=newPan;setPan(newPan);};
   const onMouseUp=()=>{dragging.current=false;};
+
   if(err)return<pre style={{padding:16,color:"#c0392b",fontSize:12,whiteSpace:"pre-wrap",userSelect:"text",cursor:"text"}}>{t.mermaidError}{err}</pre>;
+
   return(
     <div style={{position:"relative",width:"100%",height:"100%",overflow:"hidden"}}>
       <div style={{position:"absolute",top:10,right:10,zIndex:10,display:"flex",gap:4,alignItems:"center"}}>
-        <button onClick={()=>setZoom(z=>Math.min(10,z+0.2))} style={zoomBtnStyle}>+</button>
+        <button onClick={()=>{zoomRef.current=zoom+0.2<=10?zoom+0.2:10;setZoom(zoomRef.current);}} style={zoomBtnStyle}>+</button>
         <span style={{fontSize:11,color:"var(--text2)",minWidth:38,textAlign:"center"}}>{Math.round(zoom*100)}%</span>
-        <button onClick={()=>setZoom(z=>Math.max(0.1,z-0.2))} style={zoomBtnStyle}>−</button>
-        <button onClick={()=>{setZoom(1);setPan({x:0,y:0});}} style={zoomBtnStyle} title="Reset">⊙</button>
-        <button onClick={()=>{if(ref.current?.parentElement){const cW=ref.current.parentElement.clientWidth-48;const nW=parseFloat(ref.current.dataset.naturalW)||800;setZoom(cW/nW);setPan({x:0,y:0});}}} style={{...zoomBtnStyle,fontSize:12,width:32}} title="Fit width">⇔</button>
+        <button onClick={()=>{zoomRef.current=zoom-0.2>=0.1?zoom-0.2:0.1;setZoom(zoomRef.current);}} style={zoomBtnStyle}>−</button>
+        <button onClick={()=>{zoomRef.current=1;panRef.current={x:0,y:0};setZoom(1);setPan({x:0,y:0});}} style={zoomBtnStyle} title="Reset">⊙</button>
+        <button onClick={()=>{
+          if(wheelContainerRef.current){
+            const cW=wheelContainerRef.current.clientWidth;
+            const nW=parseFloat(ref.current?.dataset.naturalW)||800;
+            const nZ=cW/nW;
+            zoomRef.current=nZ;panRef.current={x:0,y:0};
+            setZoom(nZ);setPan({x:0,y:0});
+          }
+        }} style={{...zoomBtnStyle,fontSize:12,width:32}} title="Fit width">⇔</button>
       </div>
-      <div style={{width:"100%",height:"100%",overflow:"hidden",cursor:dragging.current?"grabbing":"grab"}} onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
-        <div ref={ref} style={{transformOrigin:"0 0",transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,padding:24,display:"inline-block"}}/>
+      <div ref={wheelContainerRef} style={{width:"100%",height:"100%",overflow:"hidden",cursor:dragging.current?"grabbing":"grab"}}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+        <div ref={ref} style={{transformOrigin:"0 0",transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,padding:"24px",display:"inline-block"}}/>
       </div>
     </div>
   );
 }
-
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
 function inlineMarkdown(text){
@@ -477,11 +526,14 @@ function useResizer(initPct=42){
   return{pct,containerRef,onMouseDown};
 }
 
-function Bubble({msg}){
+function Bubble({msg,lang}){
   const isUser=msg.role==="user";
   const[patchOpen,setPatchOpen]=useState(false);
   const patches=msg.patches||[];
   const hasPatches=patches.length>0;
+  const patchLabel = patches.length===1
+    ? (lang==="ru" ? "изменение" : "change")
+    : (lang==="ru" ? "изменения" : "changes");
   return(
     <div className={`bubble-wrap ${isUser?"user":"assistant"}`}>
       <div className={`bubble ${isUser?"bubble-user":"bubble-assistant"}`} style={{textAlign:"left"}}>
@@ -490,7 +542,7 @@ function Bubble({msg}){
           <div style={{marginTop:8}}>
             <button onClick={()=>setPatchOpen(o=>!o)} style={{border:"none",background:"var(--bg3)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",color:"var(--text2)",display:"flex",alignItems:"center",gap:4}}>
               <span style={{fontSize:10}}>{patchOpen?"▾":"▸"}</span>
-              {patches.length} {patches.length===1?"изменение":"изменения"}
+              {patches.length} {patchLabel}
             </button>
             {patchOpen&&(
               <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:6}}>
@@ -550,6 +602,7 @@ export default function App(){
   const[historyMeta,setHistoryMeta]=useState([]);
   const[svgString,setSvgString]=useState(null);
   const[attachments,setAttachments]=useState([]);
+  const[fullscreen,setFullscreen]=useState(false);
   const fileInputRef=useRef(null);
   const bottomRef=useRef(null);
   const{pct,containerRef,onMouseDown}=useResizer(42);
@@ -560,6 +613,12 @@ export default function App(){
 
   const startNewChat=()=>{setSessionId(genId());setMessages([]);setArtifact(null);setStreamingArtifact(null);setHistory([]);setHistIdx(-1);setSvgString(null);setAttachments([]);setViewMode("preview");setShowSessions(false);setShowSettings(false);setHistoryMeta([]);setToast(null);};
   const loadSessionData=s=>{setSessionId(s.id);setMessages(s.messages||[]);setHistory(s.artifactHistory||[]);setArtifact(s.currentArtifact||null);setHistIdx((s.artifactHistory||[]).length-1);setSvgString(null);setViewMode("preview");setShowSessions(false);setHistoryMeta((s.artifactHistory||[]).map(()=>({type:"new"})));setToast(null);};
+
+  useEffect(()=>{
+    const onKey = e => { if(e.key==="Escape" && fullscreen) setFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    return ()=>window.removeEventListener("keydown", onKey);
+  },[fullscreen]);
 
   useEffect(()=>{if(window.hljs)return;const link=document.createElement("link");link.rel="stylesheet";link.href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/atom-one-light.min.css";document.head.appendChild(link);const script=document.createElement("script");script.src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/highlight.min.js";script.onload=()=>{window.hljs.configure({ignoreUnescapedHTML:true});document.querySelectorAll("pre code").forEach(el=>window.hljs.highlightElement(el));};document.head.appendChild(script);},[]);
   useEffect(()=>{if(viewMode==="code"&&window.hljs)setTimeout(()=>document.querySelectorAll("pre code").forEach(el=>window.hljs.highlightElement(el)),50);},[viewMode,artifact]);
@@ -672,7 +731,7 @@ export default function App(){
             :<>
               <div className="messages" onDrop={handleDrop} onDragOver={e=>e.preventDefault()}>
                 {messages.length===0&&(<div className="placeholder"><div className="placeholder-icon">✦</div>{t.placeholder1}<br/>{t.placeholder2}<br/>{t.placeholder3}<br/>{t.placeholder4}</div>)}
-                {messages.map((m,i)=><Bubble key={i} msg={m}/>)}
+                {messages.map((m,i)=><Bubble key={i} msg={m} lang={lang}/>)}
                 <div ref={bottomRef}/>
               </div>
               <AttachmentPreview attachments={attachments} onRemove={i=>setAttachments(a=>a.filter((_,j)=>j!==i))}/>
@@ -690,7 +749,10 @@ export default function App(){
 
       <div className="resizer" onMouseDown={onMouseDown}/>
 
-      <div className="artifact-panel">
+      <div className="artifact-panel" style={fullscreen ? {
+        position:"fixed", top:0, left:0, width:"100vw", height:"100vh",
+        zIndex:1000, background:"var(--bg)", display:"flex", flexDirection:"column"
+      } : {}}>
         <div className="panel-header">
           <span className="artifact-title">
             {displayArtifact?`${displayArtifact.title} · ${displayArtifact.type}`:t.artifact}
@@ -713,6 +775,14 @@ export default function App(){
             )}
             <ExportMenu artifact={artifact} svgString={svgString} t={t}/>
             {displayArtifact&&["preview","code"].map(m=>(<button key={m} onClick={()=>setViewMode(m)} className={`tab-btn ${viewMode===m?"active":""}`}>{m==="preview"?t.preview:t.code}</button>))}
+            <button
+              className="btn-secondary btn-sm"
+              onClick={()=>setFullscreen(f=>!f)}
+              title={fullscreen ? t.exitFullscreen : t.fullscreen}
+              style={{fontSize:14, padding:"0 8px"}}
+            >
+              {fullscreen ? "✕" : "⛶"}
+            </button>
           </div>
         </div>
         <div className="artifact-content" style={{position:"relative"}}>
