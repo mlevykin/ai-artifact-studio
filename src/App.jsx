@@ -25,13 +25,15 @@ const T = {
     artifactEmpty: "Артефакт появится здесь",
     mermaidError: "Ошибка рендера Mermaid:\n", mermaidLoad: "Не удалось загрузить Mermaid",
     svgNotFound: "SVG не найден", pngError: "Не удалось конвертировать SVG в PNG.\nПопробуйте экспорт в SVG.",
-    sending: "...", send: "→",
+    sending: "→", send: "→",
     attachTooltip: "Прикрепить файлы", attachLimit: "Максимум 5 файлов",
     fileTooBig: "Файл слишком большой (макс 10MB)",
     sessions: "Чаты", newChat: "+ Новый чат",
     patched: "патч применён", saveVersion: "💾 Сохранить версию",
     changes: "изменение", changes2: "изменения",
     fullscreen: "Полный экран", exitFullscreen: "Выйти",
+    thinking: "Размышляю...", applyingPatch: "Патч",
+    stopped: "Остановлено",
   },
   en: {
     appTitle: "Artifact Studio",
@@ -62,7 +64,9 @@ const T = {
     sessions: "Chats", newChat: "+ New chat",
     patched: "patch applied", saveVersion: "💾 Save version",
     changes: "change", changes2: "changes",
-    fullscreen: "Полный экран", exitFullscreen: "Выйти",
+    fullscreen: "Fullscreen", exitFullscreen: "Exit",
+    thinking: "Thinking...", applyingPatch: "Applying patch",
+    stopped: "Stopped",
   },
 };
 
@@ -267,17 +271,39 @@ Outside the tags, write 1 sentence only.`;
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
 const CLAUDE_BASE="/api/anthropic";
-async function* streamClaude(model,messages){
-  const res=await fetch(`${CLAUDE_BASE}/v1/messages`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model,max_tokens:4096,system:SYSTEM_PROMPT,messages,stream:true})});
-  if(!res.ok)throw new Error(`Claude API error ${res.status}: ${await res.text()}`);
-  const reader=res.body.getReader();const dec=new TextDecoder();
-  while(true){const{done,value}=await reader.read();if(done)break;for(const line of dec.decode(value).split("\n")){if(!line.startsWith("data:"))continue;try{const d=JSON.parse(line.slice(5));if(d.delta?.text)yield d.delta.text;}catch{}}}
+async function* streamClaude(model, messages, signal) {
+  const res = await fetch(`${CLAUDE_BASE}/v1/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, max_tokens: 4096, system: SYSTEM_PROMPT, messages, stream: true }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Claude API error ${res.status}: ${await res.text()}`);
+  const reader = res.body.getReader(); const dec = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read(); if (done) break;
+    for (const line of dec.decode(value).split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      try { const d = JSON.parse(line.slice(5)); if (d.delta?.text) yield d.delta.text; } catch {}
+    }
+  }
 }
-async function* streamOllama(base,model,messages){
-  const res=await fetch(`${base}/api/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model,stream:true,messages:[{role:"system",content:SYSTEM_PROMPT},...messages]})});
-  if(!res.ok)throw new Error(`Ollama error ${res.status}`);
-  const reader=res.body.getReader();const dec=new TextDecoder();
-  while(true){const{done,value}=await reader.read();if(done)break;for(const line of dec.decode(value).split("\n")){if(!line.trim())continue;try{const d=JSON.parse(line);if(d.message?.content)yield d.message.content;}catch{}}}
+async function* streamOllama(base, model, messages, signal) {
+  const res = await fetch(`${base}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, stream: true, messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages] }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Ollama error ${res.status}`);
+  const reader = res.body.getReader(); const dec = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read(); if (done) break;
+    for (const line of dec.decode(value).split("\n")) {
+      if (!line.trim()) continue;
+      try { const d = JSON.parse(line); if (d.message?.content) yield d.message.content; } catch {}
+    }
+  }
 }
 
 // ─── Artifact parsing ─────────────────────────────────────────────────────────
@@ -391,7 +417,6 @@ function MermaidView({code,onSvgReady,t}){
     document.head.appendChild(script);
   },[code]);
 
-  // Нативный wheel — {passive:false} чтобы preventDefault работал
   useEffect(()=>{
     const el=wheelContainerRef.current;
     if(!el)return;
@@ -446,6 +471,7 @@ function MermaidView({code,onSvgReady,t}){
     </div>
   );
 }
+
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
 function inlineMarkdown(text){
@@ -470,6 +496,39 @@ function renderMarkdown(text){
     elements.push(<div key={i} style={{marginBottom:2}}>{inlineMarkdown(line)}</div>);i++;
   }
   return elements;
+}
+
+// ─── Thinking indicator ───────────────────────────────────────────────────────
+
+function ThinkingIndicator({ phase, patchCount, totalPatches, t }) {
+  // phase: "thinking" | "patching" | null
+  if (!phase) return null;
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8,
+      padding: "8px 14px", color: "var(--text2)", fontSize: 12,
+    }}>
+      <span style={{ display: "inline-flex", gap: 3 }}>
+        {[0,1,2].map(i => (
+          <span key={i} style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: "var(--text2)", opacity: 0.7,
+            animation: `dotPulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+          }}/>
+        ))}
+      </span>
+      {phase === "patching" ? (
+        <span>
+          {totalPatches > 0
+            ? <>{t.applyingPatch} <span style={{fontWeight:700,color:"var(--text)"}}>{patchCount}</span> / {totalPatches}</>
+            : t.applyingPatch
+          }
+        </span>
+      ) : (
+        <span>{t.thinking}</span>
+      )}
+    </div>
+  );
 }
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -536,8 +595,16 @@ function Bubble({msg,lang}){
     : (lang==="ru" ? "изменения" : "changes");
   return(
     <div className={`bubble-wrap ${isUser?"user":"assistant"}`}>
+      {/* Image thumbnails for user messages */}
+      {isUser && msg.images && msg.images.length > 0 && (
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6,justifyContent:"flex-end"}}>
+          {msg.images.map((src,i)=>(
+            <img key={i} src={src} alt="" style={{maxWidth:180,maxHeight:120,borderRadius:6,objectFit:"cover",border:"1px solid var(--border)"}}/>
+          ))}
+        </div>
+      )}
       <div className={`bubble ${isUser?"bubble-user":"bubble-assistant"}`} style={{textAlign:"left"}}>
-        {isUser?(msg.text||<span className="muted italic">...</span>):(msg.text?renderMarkdown(msg.text):<span className="muted italic">...</span>)}
+        {isUser?(msg.text||null):(msg.text?.trim()?renderMarkdown(msg.text):null)}
         {hasPatches&&(
           <div style={{marginTop:8}}>
             <button onClick={()=>setPatchOpen(o=>!o)} style={{border:"none",background:"var(--bg3)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",color:"var(--text2)",display:"flex",alignItems:"center",gap:4}}>
@@ -593,6 +660,8 @@ export default function App(){
   const[messages,setMessages]=useState([]);
   const[input,setInput]=useState("");
   const[loading,setLoading]=useState(false);
+  const[thinkingPhase,setThinkingPhase]=useState(null); // "thinking" | "patching" | null
+  const[patchProgress,setPatchProgress]=useState({done:0,total:0});
   const[artifact,setArtifact]=useState(null);
   const[streamingArtifact,setStreamingArtifact]=useState(null);
   const[viewMode,setViewMode]=useState("preview");
@@ -605,24 +674,61 @@ export default function App(){
   const[fullscreen,setFullscreen]=useState(false);
   const fileInputRef=useRef(null);
   const bottomRef=useRef(null);
+  const abortRef=useRef(null); // AbortController
   const{pct,containerRef,onMouseDown}=useResizer(42);
 
   useEffect(()=>{if(!messages.length)return;saveSession({id:sessionId,title:sessionTitle(messages),messages,artifactHistory:history,currentArtifact:artifact,updatedAt:Date.now()});},[messages,history,artifact]);
 
   const showToast=useCallback(text=>{setToast(text);setTimeout(()=>setToast(null),3000);},[]);
 
-  const startNewChat=()=>{setSessionId(genId());setMessages([]);setArtifact(null);setStreamingArtifact(null);setHistory([]);setHistIdx(-1);setSvgString(null);setAttachments([]);setViewMode("preview");setShowSessions(false);setShowSettings(false);setHistoryMeta([]);setToast(null);};
+  const startNewChat=()=>{setSessionId(genId());setMessages([]);setArtifact(null);setStreamingArtifact(null);setHistory([]);setHistIdx(-1);setSvgString(null);setAttachments([]);setViewMode("preview");setShowSessions(false);setShowSettings(false);setHistoryMeta([]);setToast(null);setThinkingPhase(null);};
   const loadSessionData=s=>{setSessionId(s.id);setMessages(s.messages||[]);setHistory(s.artifactHistory||[]);setArtifact(s.currentArtifact||null);setHistIdx((s.artifactHistory||[]).length-1);setSvgString(null);setViewMode("preview");setShowSessions(false);setHistoryMeta((s.artifactHistory||[]).map(()=>({type:"new"})));setToast(null);};
 
+  // ── Stop generation ──────────────────────────────────────────────────────────
+  const stopGeneration = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+  }, []);
+
+  // ── Global keyboard shortcuts ────────────────────────────────────────────────
   useEffect(()=>{
-    const onKey = e => { if(e.key==="Escape" && fullscreen) setFullscreen(false); };
+    const onKey = e => {
+      if(e.key==="Escape" && fullscreen) setFullscreen(false);
+    };
     window.addEventListener("keydown", onKey);
     return ()=>window.removeEventListener("keydown", onKey);
   },[fullscreen]);
 
+  // ── Clipboard paste (Ctrl+V) — capture images from clipboard ────────────────
+  useEffect(()=>{
+    const onPaste = async e => {
+      // Only intercept if not typing inside a textarea/input
+      const tag = document.activeElement?.tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      const items = Array.from(e.clipboardData?.items || []);
+      const imageItems = items.filter(it => it.type.startsWith("image/"));
+      if (!imageItems.length) return;
+      e.preventDefault();
+      const rem = MAX_FILES - attachments.length;
+      if (rem <= 0) { alert(t.attachLimit); return; }
+      const newAtts = [];
+      for (const item of imageItems.slice(0, rem)) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        const att = await readFile(file, t);
+        if (att) newAtts.push(att);
+      }
+      if (newAtts.length) setAttachments(prev => [...prev, ...newAtts]);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [attachments, t]);
+
   useEffect(()=>{if(window.hljs)return;const link=document.createElement("link");link.rel="stylesheet";link.href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/atom-one-light.min.css";document.head.appendChild(link);const script=document.createElement("script");script.src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/highlight.min.js";script.onload=()=>{window.hljs.configure({ignoreUnescapedHTML:true});document.querySelectorAll("pre code").forEach(el=>window.hljs.highlightElement(el));};document.head.appendChild(script);},[]);
   useEffect(()=>{if(viewMode==="code"&&window.hljs)setTimeout(()=>document.querySelectorAll("pre code").forEach(el=>window.hljs.highlightElement(el)),50);},[viewMode,artifact]);
-  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[messages]);
+  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[messages, thinkingPhase]);
 
   const handleFiles=async files=>{const rem=MAX_FILES-attachments.length;if(rem<=0){alert(t.attachLimit);return;}const res=await Promise.all(Array.from(files).slice(0,rem).map(f=>readFile(f,t)));setAttachments(prev=>[...prev,...res.filter(Boolean)]);};
   const handleDrop=useCallback(e=>{e.preventDefault();if(e.dataTransfer.files.length)handleFiles(e.dataTransfer.files);},[attachments,t]);
@@ -631,11 +737,18 @@ export default function App(){
   const sendMessage=useCallback(async()=>{
     const txt=input.trim();if(!txt||loading)return;
     setInput("");
-    const userMsg={role:"user",text:txt};
-    const asstMsg={role:"assistant",text:""};
-    setMessages(prev=>[...prev,userMsg,asstMsg]);
-    setLoading(true);setStreamingArtifact(null);
     const currentAttachments=[...attachments];setAttachments([]);
+
+    // Collect image previews to show in the bubble
+    const imagePreviewSrcs = currentAttachments.filter(a=>a.type==="image").map(a=>a.base64);
+
+    const userMsg={role:"user",text:txt,images:imagePreviewSrcs.length?imagePreviewSrcs:undefined};
+    const asstMsg={role:"assistant",text:" "};
+    setMessages(prev=>[...prev,userMsg,asstMsg]);
+    setLoading(true);
+    setThinkingPhase("thinking");
+    setStreamingArtifact(null);
+
     const currentArt=artifact;
     const histMsgs=[...messages,userMsg].map((m,i)=>{
       const isLast=i===messages.length;
@@ -644,7 +757,13 @@ export default function App(){
       if(isLast&&currentAttachments.length){if(cfg.provider==="ollama")return buildOllamaMessage(content,currentAttachments);return{role:"user",content:buildContent(content,currentAttachments)};}
       return{role:m.role,content};
     });
+
+    // Create AbortController for this request
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     let full="";
+    let stopped = false;
     const update=chunk=>{
       full+=chunk;
       const artOpen=full.indexOf("<artifact");const artClose=full.indexOf("</artifact>");const patchOpen=full.indexOf("<patch>");
@@ -659,41 +778,62 @@ export default function App(){
       }
     };
     try{
-      const stream=cfg.provider==="claude"?streamClaude(cfg.claudeModel,histMsgs):streamOllama(cfg.ollamaBase,cfg.ollamaModel,histMsgs);
+      const stream=cfg.provider==="claude"
+        ?streamClaude(cfg.claudeModel,histMsgs,controller.signal)
+        :streamOllama(cfg.ollamaBase,cfg.ollamaModel,histMsgs,controller.signal);
       for await(const chunk of stream)update(chunk);
     }catch(e){
-      setMessages(prev=>{const n=[...prev];n[n.length-1]={role:"assistant",text:"Error: "+e.message};return n;});
+      if(e.name==="AbortError"||controller.signal.aborted){
+        stopped=true;
+        setMessages(prev=>{const n=[...prev];n[n.length-1]={role:"assistant",text:(n[n.length-1].text||"")+" ⬛"};return n;});
+      }else{
+        setMessages(prev=>{const n=[...prev];n[n.length-1]={role:"assistant",text:"Error: "+e.message};return n;});
+      }
     }
 
-    // ── Финализация ──
-    const patches=parsePatches(full);
-    console.log("FULL RESPONSE:", full.slice(-500));
-    console.log("PATCHES:", JSON.stringify(patches, null, 2));
-    if(currentArt) console.log("ARTIFACT:", currentArt.content.slice(0, 300));
-    if(full.includes("<patch>")&&patches.length===0)console.warn("Patch tag found but parsing failed. Raw:",full);
+    abortRef.current = null;
 
-    if(patches.length>0&&currentArt){
-      const{result,applied}=applyPatches(currentArt.content,patches);
-      if(applied>0){
-        const patched={...currentArt,content:result};
-        setArtifact(patched);setStreamingArtifact(null);
-        setHistory(h=>{const nh=[...h,patched];setHistIdx(nh.length-1);return nh;});
-        setHistoryMeta(hm=>[...hm,{type:"patch",count:applied}]);
-        setSvgString(null);setViewMode("preview");
-        showToast(`✓ ${applied} ${applied===1?t.changes:t.changes2}`);
-        // Сохраняем патчи в сообщение для отображения
-        setMessages(prev=>{const n=[...prev];n[n.length-1]={...n[n.length-1],patches:patches.slice(0,applied)};return n;});
+    if (!stopped) {
+      // ── Finalise ──
+      const patches=parsePatches(full);
+      if(full.includes("<patch>")&&patches.length===0)console.warn("Patch tag found but parsing failed.");
+
+      if(patches.length>0&&currentArt){
+        setThinkingPhase("patching");
+        setPatchProgress({done:0,total:patches.length});
+        // Simulate incremental patch progress for UX feedback
+        let applied=0;
+        let result=currentArt.content;
+        for(let pi=0;pi<patches.length;pi++){
+          const p=patches[pi];
+          const patched=fuzzyReplace(result,p.old,p.new);
+          if(patched!==null){result=patched;applied++;}
+          setPatchProgress({done:pi+1,total:patches.length});
+          // small yield so React can re-render the counter
+          await new Promise(r=>setTimeout(r,30));
+        }
+        if(applied>0){
+          const patched={...currentArt,content:result};
+          setArtifact(patched);setStreamingArtifact(null);
+          setHistory(h=>{const nh=[...h,patched];setHistIdx(nh.length-1);return nh;});
+          setHistoryMeta(hm=>[...hm,{type:"patch",count:applied}]);
+          setSvgString(null);setViewMode("preview");
+          showToast(`✓ ${applied} ${applied===1?t.changes:t.changes2}`);
+          setMessages(prev=>{const n=[...prev];n[n.length-1]={...n[n.length-1],patches:patches.slice(0,applied)};return n;});
+        }else{
+          const fullArt=parseArtifact(full);
+          if(fullArt){setArtifact(fullArt);setStreamingArtifact(null);setHistory(h=>{const nh=[...h,fullArt];setHistIdx(nh.length-1);return nh;});setHistoryMeta(hm=>[...hm,{type:"new"}]);setSvgString(null);setViewMode("preview");}
+          else setStreamingArtifact(null);
+        }
       }else{
-        console.warn("Patch not applied, trying full replacement.");
-        const fullArt=parseArtifact(full);
-        if(fullArt){setArtifact(fullArt);setStreamingArtifact(null);setHistory(h=>{const nh=[...h,fullArt];setHistIdx(nh.length-1);return nh;});setHistoryMeta(hm=>[...hm,{type:"new"}]);setSvgString(null);setViewMode("preview");}
+        const finalArt=parseArtifact(full);
+        if(finalArt){setArtifact(finalArt);setStreamingArtifact(null);setHistory(h=>{const nh=[...h,finalArt];setHistIdx(nh.length-1);return nh;});setHistoryMeta(hm=>[...hm,{type:"new"}]);setSvgString(null);setViewMode("preview");}
         else setStreamingArtifact(null);
       }
-    }else{
-      const finalArt=parseArtifact(full);
-      if(finalArt){setArtifact(finalArt);setStreamingArtifact(null);setHistory(h=>{const nh=[...h,finalArt];setHistIdx(nh.length-1);return nh;});setHistoryMeta(hm=>[...hm,{type:"new"}]);setSvgString(null);setViewMode("preview");}
-      else setStreamingArtifact(null);
     }
+
+    setThinkingPhase(null);
+    setPatchProgress({done:0,total:0});
     setLoading(false);
   },[input,loading,messages,cfg,attachments,artifact,t,showToast,lang]);
 
@@ -712,6 +852,14 @@ export default function App(){
 
   return(
     <div ref={containerRef} className="app-root">
+      {/* dotPulse keyframes injected once */}
+      <style>{`
+        @keyframes dotPulse {
+          0%,80%,100%{transform:scale(0.6);opacity:0.4}
+          40%{transform:scale(1);opacity:1}
+        }
+      `}</style>
+
       <div className="chat-panel" style={{width:`${pct}%`,display:"flex",flexDirection:"column"}}>
         <div className="panel-header">
           <div>
@@ -732,6 +880,13 @@ export default function App(){
               <div className="messages" onDrop={handleDrop} onDragOver={e=>e.preventDefault()}>
                 {messages.length===0&&(<div className="placeholder"><div className="placeholder-icon">✦</div>{t.placeholder1}<br/>{t.placeholder2}<br/>{t.placeholder3}<br/>{t.placeholder4}</div>)}
                 {messages.map((m,i)=><Bubble key={i} msg={m} lang={lang}/>)}
+                {/* Thinking indicator — shown below the last assistant bubble */}
+                <ThinkingIndicator
+                  phase={thinkingPhase}
+                  patchCount={patchProgress.done}
+                  totalPatches={patchProgress.total}
+                  t={t}
+                />
                 <div ref={bottomRef}/>
               </div>
               <AttachmentPreview attachments={attachments} onRemove={i=>setAttachments(a=>a.filter((_,j)=>j!==i))}/>
@@ -740,8 +895,40 @@ export default function App(){
                 <button className="btn-secondary btn-sm" title={t.attachTooltip} onClick={()=>fileInputRef.current?.click()} style={{flexShrink:0,fontSize:18,padding:"0 8px",height:36}}>📎</button>
                 <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={handleKey} rows={1}
                   placeholder={artifact?(lang==="ru"?`Сообщение... или "исправь ${artifact.title}"`:`Message... or "fix ${artifact.title}"`):t.inputPlaceholder}
-                  className="chat-input" onInput={e=>{e.target.style.height="auto";e.target.style.height=Math.min(e.target.scrollHeight,120)+"px";}}/>
-                <button onClick={sendMessage} disabled={loading||!input.trim()} className={`send-btn ${loading||!input.trim()?"disabled":""}`}>{loading?t.sending:t.send}</button>
+                  className="chat-input"
+                  onPaste={async e=>{
+                    // Intercept image pastes inside the textarea too
+                    const items=Array.from(e.clipboardData?.items||[]);
+                    const imgItems=items.filter(it=>it.type.startsWith("image/"));
+                    if(!imgItems.length)return;
+                    e.preventDefault();
+                    const rem=MAX_FILES-attachments.length;
+                    if(rem<=0){alert(t.attachLimit);return;}
+                    const newAtts=[];
+                    for(const item of imgItems.slice(0,rem)){const file=item.getAsFile();if(!file)continue;const att=await readFile(file,t);if(att)newAtts.push(att);}
+                    if(newAtts.length)setAttachments(prev=>[...prev,...newAtts]);
+                  }}
+                  onInput={e=>{e.target.style.height="auto";e.target.style.height=Math.min(e.target.scrollHeight,120)+"px";}}/>
+                {/* Stop button — shown while loading */}
+                {loading
+                  ? <button
+                      onClick={stopGeneration}
+                      title={lang==="ru"?"Остановить":"Stop"}
+                      style={{
+                        flexShrink:0,width:36,height:36,border:"1px solid var(--border2)",
+                        borderRadius:6,background:"var(--bg2)",cursor:"pointer",
+                        display:"inline-flex",alignItems:"center",justifyContent:"center",
+                        color:"var(--text2)",transition:"background 0.15s",
+                      }}
+                      onMouseEnter={e=>e.currentTarget.style.background="var(--bg3)"}
+                      onMouseLeave={e=>e.currentTarget.style.background="var(--bg2)"}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <rect x="1" y="1" width="10" height="10" rx="1.5"/>
+                      </svg>
+                    </button>
+                  : <button onClick={sendMessage} disabled={!input.trim()} className={`send-btn ${!input.trim()?"disabled":""}`}>{t.send}</button>
+                }
               </div>
             </>
         }
